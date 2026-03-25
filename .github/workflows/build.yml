@@ -30,20 +30,33 @@ jobs:
       - name: Run dashboard script
         run: python nifty_vol_dashboard.py
 
-      - name: Inline Plotly JS
+      - name: Inline Plotly JS and fix resize
         run: |
-          python - <<'EOF'
-          import re, requests
+          python - << 'PYEOF'
+          import requests
+
           src = open("nifty_vol_dashboard.html", encoding="utf-8").read()
-          cdn = "https://cdn.plot.ly/plotly-2.35.2.min.js"
-          js  = requests.get(cdn, timeout=60).text
-          src = re.sub(r'<script src="https://cdn\.plot\.ly/plotly[^"]*\.js"></script>', f'<script>{js}</script>', src, count=1)
-          old = "renderNotice(rows);\n}"
-          new = "renderNotice(rows);\n  ['c-dom','c-wom','c-wdn','c-meg','c-weg','c-vix'].forEach(function(id){try{Plotly.Plots.resize(document.getElementById(id));}catch(e){}});\n}"
-          src = src.replace(old, new, 1)
+
+          # Download Plotly JS
+          cdn_url = "https://cdn.plot.ly/plotly-2.35.2.min.js"
+          js_text = requests.get(cdn_url, timeout=120).text
+
+          # Replace CDN script tag with inline script (exact string, no regex)
+          cdn_tag = '<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>'
+          inline_tag = '<script>' + js_text + '</script>'
+          src = src.replace(cdn_tag, inline_tag, 1)
+
+          # Add resize fix after renderNotice call
+          old_str = 'renderNotice(rows);\n}'
+          new_str = ('renderNotice(rows);\n'
+                     "  ['c-dom','c-wom','c-wdn','c-meg','c-weg','c-vix']"
+                     '.forEach(function(id){'
+                     'try{Plotly.Plots.resize(document.getElementById(id));}catch(e){}});\n}')
+          src = src.replace(old_str, new_str, 1)
+
           open("index.html", "w", encoding="utf-8").write(src)
-          print("index.html written,", len(src)//1024, "KB")
-          EOF
+          print("Done. index.html size:", len(src) // 1024, "KB")
+          PYEOF
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
