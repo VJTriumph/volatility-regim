@@ -1,0 +1,54 @@
+name: Build & Deploy Dashboard
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 1 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install yfinance numpy pandas requests
+
+      - name: Run dashboard script
+        run: python nifty_vol_dashboard.py
+
+      - name: Inline Plotly JS
+        run: |
+          python - <<'EOF'
+          import re, requests
+          src = open("nifty_vol_dashboard.html", encoding="utf-8").read()
+          cdn = "https://cdn.plot.ly/plotly-2.35.2.min.js"
+          js  = requests.get(cdn, timeout=60).text
+          src = re.sub(r'<script src="https://cdn\.plot\.ly/plotly[^"]*\.js"></script>', f'<script>{js}</script>', src, count=1)
+          old = "renderNotice(rows);\n}"
+          new = "renderNotice(rows);\n  ['c-dom','c-wom','c-wdn','c-meg','c-weg','c-vix'].forEach(function(id){try{Plotly.Plots.resize(document.getElementById(id));}catch(e){}});\n}"
+          src = src.replace(old, new, 1)
+          open("index.html", "w", encoding="utf-8").write(src)
+          print("index.html written,", len(src)//1024, "KB")
+          EOF
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: .
+          include_files: index.html
+          commit_message: 'chore: auto-deploy dashboard [skip ci]'
