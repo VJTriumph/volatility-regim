@@ -15,7 +15,7 @@ FEATURES
   • Significance heatmap table
 """
 import warnings; warnings.filterwarnings("ignore")
-import sys, json, calendar
+import sys, json, calendar, os
 import numpy as np
 import pandas as pd
 
@@ -39,98 +39,55 @@ PERIODS = [
          monthly_exp_dow = 1,     # Tuesday
          weekly_exp_dow  = 1),
 ]
-TICKER      = "^NSEI"
-VIX_TICKER  = "^INDIAVIX"
+# Paths to local CSV files in data/ folder
+NIFTY_CSV   = os.path.join("data", "nifty 10 year data.csv")
+VIX_CSV     = os.path.join("data", "indiavix 10 year data.csv")
 OUT         = "nifty_vol_dashboard.html"
 ANN         = 252
 
 # ═══════════════════════════════════════════════════════════════
-#  DATA FETCH
+#  DATA LOAD  ← reads local CSV files (no internet required)
 # ═══════════════════════════════════════════════════════════════
 WD_LABEL = {0:"Mon",1:"Tue",2:"Wed",3:"Thu",4:"Fri",5:"Sat",6:"Sun"}
 
+def load_csv_ohlcv(filepath):
+    """Load OHLCV data from CSV with date format like '1-Jan-15'."""
+    df = pd.read_csv(filepath)
+    df.columns = [c.strip() for c in df.columns]
+    df["Date"] = pd.to_datetime(df["Date"].str.strip(), format="%d-%b-%y")
+    df = df.set_index("Date")
+    df.index = pd.to_datetime(df.index).normalize()
+    for col in df.columns:
+        df[col] = pd.to_numeric(
+            df[col].astype(str).str.strip().str.replace(",", ""),
+            errors="coerce"
+        )
+    return df.sort_index()
+
 def fetch_ohlcv():
-    import yfinance as yf
-    s = min(p["start"] for p in PERIODS)
-    e = max(p["end"]   for p in PERIODS)
+    print(f"  Loading NIFTY data from {NIFTY_CSV} ...")
+    if not os.path.exists(NIFTY_CSV):
+        sys.exit(f"ERROR: File not found: {NIFTY_CSV}")
+    raw = load_csv_ohlcv(NIFTY_CSV)
+    if raw.empty:
+        sys.exit("ERROR: NIFTY CSV returned empty data")
+    print(f"  {len(raw)} rows [{raw.index[0].date()} -> {raw.index[-1].date()}]")
 
-    print(f"  Fetching {TICKER} OHLC …")
-    raw = yf.download(TICKER, start=s, end=e, auto_adjust=True, progress=False)
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.get_level_values(0)
-    raw.index = pd.to_datetime(raw.index).normalize()
-    if raw.empty: sys.exit("ERROR: yfinance returned empty OHLC")
-    print(f"    {len(raw)} rows  [{raw.index[0].date()} → {raw.index[-1].date()}]")
-
-    print(f"  Fetching {VIX_TICKER} …")
+    print(f"  Loading India VIX data from {VIX_CSV} ...")
     vix = pd.Series(dtype=float, name="vix")
-    try:
-        vraw = yf.download(VIX_TICKER, start=s, end=e, auto_adjust=True, progress=False)
-        if isinstance(vraw.columns, pd.MultiIndex):
-            vraw.columns = vraw.columns.get_level_values(0)
-        vix = vraw["Close"].squeeze().astype(float)
-        vix.index = pd.to_datetime(vix.index).normalize()
-        vix.name = "vix"
-        print(f"    {len(vix)} VIX rows")
-    except Exception as ex:
-        print(f"    VIX failed ({ex}) — continuing without VIX conditioning")
-
+    if os.path.exists(VIX_CSV):
+        try:
+            vdf = load_csv_ohlcv(VIX_CSV)
+            vix = vdf["Close"].squeeze().astype(float)
+            vix.name = "vix"
+            print(f"  {len(vix)} VIX rows")
+        except Exception as ex:
+            print(f"  VIX load failed ({ex}) - continuing without VIX conditioning")
+    else:
+        print("  VIX file not found - continuing without VIX conditioning")
     return raw, vix
 
-# ═══════════════════════════════════════════════════════════════
-#  CALENDAR HELPERS
-# ═══════════════════════════════════════════════════════════════
-def last_dow_of_month(year, month, dow):
-    last = calendar.monthrange(year, month)[1]
-    d = pd.Timestamp(year, month, last)
-    while d.weekday() != dow:
-        d -= pd.Timedelta(days=1)
-    return d
-
-def tag_monthly_expiry(idx, dow):
-    idx_set = set(idx)
-    months  = pd.period_range(idx.min().to_period("M"),
-                               idx.max().to_period("M"), freq="M")
-    exp_s, pre_s, post_s = set(), set(), set()
-
-    for m in months:
-        exp = last_dow_of_month(m.year, m.month, dow)
-        # roll back if holiday
-        if exp not in idx_set:
-            t = exp
-            for _ in range(5):
-                t -= pd.Timedelta(days=1)
-                if t in idx_set: exp = t; break
-        if exp in idx_set: exp_s.add(exp)
-
-        pre = exp - pd.Timedelta(days=1)
-        for _ in range(5):
-            if pre in idx_set: pre_s.add(pre); break
-            pre -= pd.Timedelta(days=1)
-
-        post = exp + pd.Timedelta(days=1)
-        for _ in range(5):
-            if post in idx_set: post_s.add(post); break
-            post += pd.Timedelta(days=1)
-
-    return [
-        "ExpiryDay" if d in exp_s else
-        "DayBefore" if d in pre_s else
-        "DayAfter"  if d in post_s else ""
-        for d in idx
-    ]
-
-def tag_weekly_expiry(idx, dow):
-    pre_dow  = (dow - 1) % 7
-    post_dow = (dow + 1) % 7
-    return [
-        "ExpiryDay" if d.weekday() == dow      else
-        "DayBefore" if d.weekday() == pre_dow  else
-        "DayAfter"  if d.weekday() == post_dow else ""
-        for d in idx
-    ]
-
-# ═══════════════════════════════════════════════════════════════
+═══════════════════════════════════════════════════════════
 #  BUILD ROW DATA
 # ═══════════════════════════════════════════════════════════════
 def build_rows(ohlc, vix):
