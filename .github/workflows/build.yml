@@ -25,28 +25,28 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install yfinance numpy pandas requests
+        run: pip install numpy pandas
 
       - name: Run dashboard script
         run: python nifty_vol_dashboard.py
 
+      - name: Download Plotly JS (with retry)
+        run: |
+          curl -fsSL --retry 5 --retry-delay 3 --max-time 180 \
+            "https://cdn.plot.ly/plotly-2.35.2.min.js" \
+            -o plotly.min.js
+          echo "Plotly JS size: $(wc -c < plotly.min.js) bytes"
+
       - name: Inline Plotly JS and fix resize
         run: |
           python - << 'PYEOF'
-          import requests
-
+          js_text = open("plotly.min.js", encoding="utf-8").read()
           src = open("nifty_vol_dashboard.html", encoding="utf-8").read()
 
-          # Download Plotly JS
-          cdn_url = "https://cdn.plot.ly/plotly-2.35.2.min.js"
-          js_text = requests.get(cdn_url, timeout=120).text
-
-          # Replace CDN script tag with inline script (exact string, no regex)
           cdn_tag = '<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>'
           inline_tag = '<script>' + js_text + '</script>'
           src = src.replace(cdn_tag, inline_tag, 1)
 
-          # Add resize fix after renderNotice call
           old_str = 'renderNotice(rows);\n}'
           new_str = ('renderNotice(rows);\n'
                      "  ['c-dom','c-wom','c-wdn','c-meg','c-weg','c-vix']"
