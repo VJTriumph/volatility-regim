@@ -90,6 +90,47 @@ def fetch_ohlcv():
 # ═══════════════════════════════════════════════════════════
 #  BUILD ROW DATA
 # ═══════════════════════════════════════════════════════════════
+def tag_monthly_expiry(idx, exp_dow):
+    """Tag each date relative to its monthly expiry (last exp_dow of month)."""
+    tags = []
+    for ts in idx:
+        y, m = ts.year, ts.month
+        # find last exp_dow of month
+        last_day = calendar.monthrange(y, m)[1]
+        expiry = None
+        for d in range(last_day, 0, -1):
+            if pd.Timestamp(y, m, d).weekday() == exp_dow:
+                expiry = pd.Timestamp(y, m, d)
+                break
+        if expiry is None:
+            tags.append("")
+        elif ts == expiry:
+            tags.append("ExpiryDay")
+        elif ts == expiry - pd.Timedelta(days=1):
+            tags.append("DayBefore")
+        elif ts == expiry + pd.Timedelta(days=1):
+            tags.append("DayAfter")
+        else:
+            tags.append("")
+    return tags
+
+def tag_weekly_expiry(idx, exp_dow):
+    """Tag each date relative to the weekly expiry (nearest exp_dow on/after date)."""
+    tags = []
+    for ts in idx:
+        wd = ts.weekday()
+        if wd == exp_dow:
+            tags.append("ExpiryDay")
+        else:
+            prev_expiry_delta = (wd - exp_dow) % 7
+            if prev_expiry_delta == 1:
+                tags.append("DayAfter")
+            elif (exp_dow - wd) % 7 == 1:
+                tags.append("DayBefore")
+            else:
+                tags.append("")
+    return tags
+
 def build_rows(ohlc, vix):
     rows = []
     for pid, p in enumerate(PERIODS):
