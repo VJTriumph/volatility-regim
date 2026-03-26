@@ -296,12 +296,21 @@ tr:hover td{{background:var(--panel2)}}
   <div class="sep"></div>
   <div class="cg" id="vix-cg" style="display:none">
     <label>VIX Regime</label>
-    <select id="vix-sel" onchange="update()">
-      <option value="all">All Regimes</option>
-      <option value="low">Low  (&lt;p33)</option>
-      <option value="med">Medium  (p33–p67)</option>
-      <option value="high">High  (&gt;p67)</option>
-    </select>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+      <select id="vix-sel" onchange="update()" style="min-width:106px">
+        <option value="all">All Regimes</option>
+        <option value="low">Low</option>
+        <option value="med">Medium</option>
+        <option value="high">High</option>
+      </select>
+      <input type="number" id="vix-lo" value="14" min="1" max="100" step="1"
+        style="width:52px;background:var(--panel);border:1px solid var(--border);color:var(--fg);padding:4px 6px;border-radius:5px;font-size:11px;font-family:inherit"
+        onchange="updateVixThresholds()" title="Low / Med boundary">
+      <span style="color:var(--muted);font-size:10px">–</span>
+      <input type="number" id="vix-hi" value="20" min="1" max="100" step="1"
+        style="width:52px;background:var(--panel);border:1px solid var(--border);color:var(--fg);padding:4px 6px;border-radius:5px;font-size:11px;font-family:inherit"
+        onchange="updateVixThresholds()" title="Med / High boundary">
+    </div>
   </div>
   <div class="sep"></div>
   <div class="cg">
@@ -352,7 +361,9 @@ let state = {{
   pid:       -1,        // -1 = all periods
   estimator: "cc",      // cc | gk
   outlier:   2.5,       // sigma, 0=off
-  vixReg:    "all",     // all|low|med|high
+    vixReg:    "all",     // all|low|med|high
+    vixLow:    14,        // VIX low/med boundary
+    vixHigh:   20,        // VIX med/high boundary
   dateStart: "{all_start}",
   dateEnd:   "{all_end}",
 }};
@@ -442,15 +453,14 @@ function getFiltered(){{
     window._outlierRemoved=before-rows.length;
   }} else {{ window._outlierRemoved=0; }}
 
-  // VIX regime
-  if(state.vixReg!=="all" && rows.some(r=>r.vix>0)){{
-    const vv=rows.map(r=>r.vix).filter(v=>v>0).sort((a,b)=>a-b);
-    const p33=vv[Math.floor(0.333*vv.length)];
-    const p67=vv[Math.floor(0.667*vv.length)];
-    if(state.vixReg==="low")  rows=rows.filter(r=>r.vix>0&&r.vix<=p33);
-    if(state.vixReg==="med")  rows=rows.filter(r=>r.vix>0&&r.vix>p33&&r.vix<=p67);
-    if(state.vixReg==="high") rows=rows.filter(r=>r.vix>0&&r.vix>p67);
-  }}
+
+    // VIX regime — fixed thresholds
+    if(state.vixReg!=="all" && rows.some(r=>r.vix>0)){{
+      const lo=state.vixLow, hi=state.vixHigh;
+      if(state.vixReg==="low")  rows=rows.filter(r=>r.vix>0&&r.vix<lo);
+      if(state.vixReg==="med")  rows=rows.filter(r=>r.vix>0&&r.vix>=lo&&r.vix<=hi);
+      if(state.vixReg==="high") rows=rows.filter(r=>r.vix>0&&r.vix>hi);
+    }}
 
   return rows;
 }}
@@ -510,13 +520,10 @@ function analyzeAll(rows,estimator){{
 }}
 
 // VIX regime chart
-function analyzeVixRegimes(rows,estimator){{
+function analyzeVixRegimes(rows,estimator,vixLow,vixHigh){{
   if(!rows.some(r=>r.vix>0)) return null;
-  const vv=rows.map(r=>r.vix).filter(v=>v>0).sort((a,b)=>a-b);
-  const p33=vv[Math.floor(0.333*vv.length)];
-  const p67=vv[Math.floor(0.667*vv.length)];
-  const regMap=r=>r.vix<=p33?"Low":r.vix<=p67?"Med":"High";
-
+  const lo=vixLow||14, hi=vixHigh||20;
+  const regMap=r=>r.vix>0&&r.vix<lo?"Low":r.vix>=lo&&r.vix<=hi?"Med":"High";
   const res={{}};
   for(const reg of["Low","Med","High"]){{
     const sub=rows.filter(r=>r.vix>0&&regMap(r)===reg);
@@ -534,7 +541,7 @@ function analyzeVixRegimes(rows,estimator){{
     }}
     res[reg]=vals;
   }}
-  return {{regimes:res,p33,p67}};
+  return {{regimes:res,vixLow:lo,vixHigh:hi}};
 }}
 
 // ═══════════════════════════════════════════════════════════════
@@ -643,7 +650,7 @@ function renderVixChart(vixData){{
     margin:{{...PLOTLY_LAYOUT.margin,b:40,t:20}},
     annotations:[
       {{xref:"paper",yref:"paper",x:0,y:-0.12,
-        text:`VIX p33=${{vixData.p33.toFixed(1)}}  p67=${{vixData.p67.toFixed(1)}}`,
+        text:`VIX Low<${{vixData.vixLow}}  Med ${{vixData.vixLow}}–${{vixData.vixHigh}}  High>${{vixData.vixHigh}}`,
         showarrow:false,font:{{size:9,color:"#8b949e"}},xanchor:"left"}}
     ],
   }};
@@ -766,8 +773,10 @@ function renderNotice(rows){{
 // MAIN UPDATE
 // ═══════════════════════════════════════════════════════════════
 function update(){{
-  state.outlier  = parseFloat(document.getElementById("out-sel").value)||0;
-  state.vixReg   = document.getElementById("vix-sel").value;
+  state.outlier = parseFloat(document.getElementById("out-sel").value)||0;
+  state.vixReg  = document.getElementById("vix-sel").value;
+  state.vixLow  = parseFloat(document.getElementById("vix-lo")?.value)||14;
+  state.vixHigh = parseFloat(document.getElementById("vix-hi")?.value)||20;
 
   const rows=getFiltered();
   if(!rows.length){{
@@ -784,7 +793,7 @@ function update(){{
   renderBar("c-wdn",analysis.wdn);
   renderBar("c-meg",analysis.meg);
   renderBar("c-weg",analysis.weg);
-  renderVixChart(analyzeVixRegimes(rows,state.estimator));
+  renderVixChart(analyzeVixRegimes(rows,state.estimator,state.vixLow,state.vixHigh));
   renderSummary(rows,analysis);
   renderTable(analysis);
   renderNotice(rows);
@@ -816,6 +825,16 @@ function setEst(btn){{
   document.querySelectorAll("#est-tabs .tab").forEach(b=>b.classList.remove("on"));
   btn.classList.add("on");
   state.estimator=btn.dataset.v;
+  update();
+}}
+
+function updateVixThresholds(){{
+  const lo = parseFloat(document.getElementById("vix-lo").value)||14;
+  const hi = parseFloat(document.getElementById("vix-hi").value)||20;
+  // ensure lo < hi
+  if(lo >= hi) {{
+    document.getElementById("vix-hi").value = lo + 1;
+  }}
   update();
 }}
 
