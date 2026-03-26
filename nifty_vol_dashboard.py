@@ -87,7 +87,7 @@ def fetch_ohlcv():
         print("  VIX file not found - continuing without VIX conditioning")
     return raw, vix
 
-═══════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════
 #  BUILD ROW DATA
 # ═══════════════════════════════════════════════════════════════
 def build_rows(ohlc, vix):
