@@ -562,3 +562,147 @@ function analyzeAll(rows,estimator){{
   const wdn=analyzeGroup(rows,r=>r.wdn,["Mon","Tue","Wed","Thu","Fri"],estimator);
   const meg=analyzeGroup(rows,r=>r.meg,["DayBefore","ExpiryDay","DayAfter"],estimator);
   const weg=analyzeGroup(rows,r=>r.weg,["DayBefore","
+ExpiryDay","DayAfter"],estimator);
+  return {domResult,wom,wdn,meg,weg};
+  }}
+  function barColor(r,ov){{
+  if(isNaN(r.vol)) return "#8b949e40";
+  const hi=r.vol>ov;
+  if(r.adjP<0.01) return hi?"#ff7b72":"#3fb950";
+  if(r.adjP<0.05) return hi?"#f0883e":"#79c0ff";
+  return "#58a6ff";
+}}
+function renderChart(id,res,ov,est){{
+  const v=res.filter(r=>!isNaN(r.vol));
+  if(!v.length){{Plotly.purge(id);return;}}
+  const layout={{paper_bgcolor:"transparent",plot_bgcolor:"transparent",
+      font:{{color:"#8b949e",size:10}},margin:{{t:10,b:40,l:45,r:10}},
+    xaxis:{{gridcolor:"#21262d"}},yaxis:{{gridcolor:"#21262d",title:"Ann.Vol %"}},
+    bargap:0.35,showlegend:false}};
+  Plotly.react(id,[{{
+    type:"bar",x:v.map(r=>String(r.label)),y:v.map(r=>+(r.vol*100).toFixed(2)),
+    marker:{{color:v.map(r=>barColor(r,ov))}},
+    error_y:{{type:"data",symmetric:false,
+      array:v.map(r=>+((r.ciHi-r.vol)*100).toFixed(2)),
+      arrayminus:v.map(r=>+((r.vol-r.ciLo)*100).toFixed(2)),
+      color:"#8b949e",thickness:1.5,width:3}}
+}},{{
+    type:"scatter",x:v.map(r=>String(r.label)),y:v.map(()=>+(ov*100).toFixed(2)),
+    mode:"lines",line:{{color:"#f0883e",dash:"dash",width:1.5}},hoverinfo:"skip"
+}}],layout,{{responsive:true,displayModeBar:false}});
+}}
+function renderSummary(rows,est){{
+  const rets=rows.map(r=>r.ret);
+  const vals=est==="gk"?rows.map(r=>r.gk):rets;
+  const vol=estVol(vals,est);
+  const sk=skewness(rets),ku=kurtosis(rets);
+  document.getElementById("summary").innerHTML=
+    `<div class="stat"><span class="stat-label">N Days</span><span class="stat-val">${{rows.length}}</span></div>`+
+    `<div class="stat"><span class="stat-label">Ann.Vol</span><span class="stat-val ${{vol>0.20?"hi":"lo"}}">${{(vol*100).toFixed(2)}}%</span></div>`+
+    `<div class="stat"><span class="stat-label">Skewness</span><span class="stat-val">${{sk.toFixed(3)}}</span></div>`+
+    `<div class="stat"><span class="stat-label">Kurtosis</span><span class="stat-val">${{ku.toFixed(3)}}</span></div>`;
+  document.getElementById("notice").textContent=
+    `Data: ${{state.dateStart}} to ${{state.dateEnd}} | Mode: ${{state.oosMode.toUpperCase()}}`;
+}}
+let _tblData=[];
+function renderTable(g){{
+  const rows=[];
+  [["DOM",g.domResult],["WOM",g.wom],["WDN",g.wdn],["MEG",g.meg],["WEG",g.weg]].forEach(([nm,gr])=>{{
+      gr.results.forEach(r=>{{if(!isNaN(r.vol))rows.push({{...r,grp:nm,ov:gr.overallVol}});}});
+  }});
+    _tblData=rows;sortAndRender();
+  }}
+  let _sCol="stars",_sAsc=false;
+  function sortAndRender(){{
+    const rows=[..._tblData].sort((a,b)=>{{
+      const av=a[_sCol],bv=b[_sCol];
+      return typeof av==="string"?(_sAsc?av.localeCompare(bv):bv.localeCompare(av)):(_sAsc?av-bv:bv-av);
+  }});
+    const th=(c,l)=>`<th onclick="sortBy('${{c}}')">${{l}}${{_sCol===c?(_sAsc?" ▲":" ▼"):""}}</th>`;
+    const head=`<tr>${{th("grp","Grp")}}${{th("label","Label")}}${{th("n","N")}}${{th("vol","Vol%")}}${{th("adjP","p(adj)")}}${{th("stars","★")}}</tr>`;
+    const body=rows.map(r=>{{
+      const pc=r.adjP<0.01?"sig-hi":r.adjP<0.05?"sig-med":"sig-lo";
+      return `<tr><td>${{r.grp}}</td><td><b>${{r.label}}</b></td><td>${{r.n}}</td>`+
+        `<td>${{(r.vol*100).toFixed(2)}}%</td><td class="${{pc}}">${{r.adjP.toFixed(3)}}</td>`+
+        `<td>${{"★".repeat(r.stars)+"☆".repeat(5-r.stars)}}</td></tr>`;
+          }}).join("");
+            document.getElementById("tbl-inner").innerHTML=`<table><thead>${{head}}</thead><tbody>${{body}}</tbody></table>`;
+            }}
+            function sortBy(c){{if(_sCol===c)_sAsc=!_sAsc;else{{_sCol=c;_sAsc=false;}}sortAndRender();}}
+  function update(){{
+  state.outlier=+document.getElementById("out-sel").value;
+  state.vixReg=document.getElementById("vix-sel").value;
+  const rows=getFiltered();
+  const est=state.estimator;
+    renderSummary(rows,est);
+  const g=analyzeAll(rows,est);
+  renderChart("c-dom",g.domResult.results,g.domResult.overallVol,est);
+    renderChart("c-wom",g.wom.results,g.wom.overallVol,est);
+      renderChart("c-wdn",g.wdn.results,g.wdn.overallVol,est);
+        renderChart("c-meg",g.meg.results,g.meg.overallVol,est);
+          renderChart("c-weg",g.weg.results,g.weg.overallVol,est);
+  renderTable(g);
+  }}
+  function setPeriod(el){{
+    document.querySelectorAll("#period-tabs .tab").forEach(b=>b.classList.remove("on"));
+  el.classList.add("on");state.pid=+el.dataset.v;update();
+}}
+function setOOS(el){{
+  document.querySelectorAll("#oos-tabs .tab").forEach(b=>b.classList.remove("on"));
+    el.classList.add("on");state.oosMode=el.dataset.v;
+      document.getElementById("oos-bar").style.display=state.oosMode==="oos"?"block":"none";update();
+      }}
+      function setEst(el){{
+        document.querySelectorAll("#est-tabs .tab").forEach(b=>b.classList.remove("on"));
+          el.classList.add("on");state.estimator=el.dataset.v;update();
+          }}
+          function applyDates(){{
+            state.dateStart=document.getElementById("d-start").value;
+              state.dateEnd=document.getElementById("d-end").value;update();
+              }}
+function resetDates(){{
+  const s=RAW.reduce((m,r)=>r.date<m?r.date:m,RAW[0].date);
+  const e=RAW.reduce((m,r)=>r.date>m?r.date:m,RAW[0].date);
+    state.dateStart=s;state.dateEnd=e;
+      document.getElementById("d-start").value=s;
+    document.getElementById("d-end").value=e;update();
+  }}
+  function updateVixThresholds(){{
+    state.vixLow=+document.getElementById("vix-lo").value;
+    state.vixHigh=+document.getElementById("vix-hi").value;update();
+    }}
+    (function init(){{
+  const pt=document.getElementById("period-tabs");
+    const ab=document.createElement("button");
+    ab.className="tab on";ab.dataset.v="-1";ab.textContent="All Periods";
+    ab.onclick=()=>setPeriod(ab);pt.appendChild(ab);
+    PERIODS.forEach((p,i)=>{{
+      const b=document.createElement("button");
+      b.className="tab";b.dataset.v=String(i);b.textContent=p.label;
+      b.onclick=()=>setPeriod(b);pt.appendChild(b);
+  }});
+    if(HAS_VIX)document.getElementById("vix-cg").style.display="flex";
+    update();
+  }})();
+  </script>
+  </body>
+  </html>
+  """
+
+def main():
+  print("="*60)
+  print("NIFTY Volatility Dashboard v2")
+  print("="*60)
+  ohlc,vix=fetch_ohlcv()
+  rows=build_rows(ohlc,vix)
+  if not rows:
+    sys.exit("ERROR: No data rows.")
+  html=build_html(rows)
+  with open(OUT,"w",encoding="utf-8") as f:
+    f.write(html)
+  print(f" Written: {OUT}")
+    print("="*60)
+
+  if __name__=="__main__":
+      main()
+      
