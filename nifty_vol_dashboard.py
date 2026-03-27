@@ -92,18 +92,34 @@ def fetch_ohlcv():
 # ═══════════════════════════════════════════════════════════
 #  BUILD ROW DATA
 # ═══════════════════════════════════════════════════════════════
+def _resolve_expiry(scheduled, trading_days):
+    """Roll scheduled expiry back to the nearest prior trading day if it's a holiday."""
+    d = scheduled
+    while d not in trading_days:
+        d -= pd.Timedelta(days=1)
+        if d < pd.Timestamp("2000-01-01"):
+            return scheduled  # safety guard
+    return d
+
 def tag_monthly_expiry(idx, exp_dow):
-    """Tag each date relative to its monthly expiry (last exp_dow of month)."""
+    """Tag each date relative to its monthly expiry (last exp_dow of month).
+    If that day is a market holiday, expiry rolls to the previous trading day."""
+    trading_days = set(idx)
+    # cache expiry per (year, month) to avoid recomputing
+    expiry_cache = {}
     tags = []
     for ts in idx:
         y, m = ts.year, ts.month
-        # find last exp_dow of month
-        last_day = calendar.monthrange(y, m)[1]
-        expiry = None
-        for d in range(last_day, 0, -1):
-            if pd.Timestamp(y, m, d).weekday() == exp_dow:
-                expiry = pd.Timestamp(y, m, d)
-                break
+        key = (y, m)
+        if key not in expiry_cache:
+            last_day = calendar.monthrange(y, m)[1]
+            sched = None
+            for d in range(last_day, 0, -1):
+                if pd.Timestamp(y, m, d).weekday() == exp_dow:
+                    sched = pd.Timestamp(y, m, d)
+                    break
+            expiry_cache[key] = _resolve_expiry(sched, trading_days) if sched else None
+        expiry = expiry_cache[key]
         if expiry is None:
             tags.append("")
         elif ts == expiry:
@@ -117,20 +133,42 @@ def tag_monthly_expiry(idx, exp_dow):
     return tags
 
 def tag_weekly_expiry(idx, exp_dow):
-    """Tag each date relative to the weekly expiry (nearest exp_dow on/after date)."""
+    """Tag each date relative to the weekly expiry (every exp_dow).
+    If that exp_dow is a market holiday, expiry rolls to the previous trading day."""
+    trading_days = set(idx)
+    # Build a map: for each week find actual expiry day
+    # A 'week' is identified by the Monday of that week
+    expiry_cache = {}
+    def get_weekly_expiry(ts):
+        # find the scheduled expiry (exp_dow) of this week
+        wd = ts.weekday()
+        days_to_expiry = (exp_dow - wd) % 7
+        sched = ts + pd.Timedelta(days=days_to_expiry)
+        # if we've already passed expiry this week, look at last week's
+        if days_to_expiry == 0:
+            sched = ts  # it's today (will be resolved below)
+        week_key = sched
+        if week_key not in expiry_cache:
+            expiry_cache[week_key] = _resolve_expiry(sched, trading_days)
+        return expiry_cache[week_key]
+
     tags = []
     for ts in idx:
         wd = ts.weekday()
-        if wd == exp_dow:
+        days_to_expiry = (exp_dow - wd) % 7
+        sched = ts + pd.Timedelta(days=days_to_expiry)
+        week_key = sched
+        if week_key not in expiry_cache:
+            expiry_cache[week_key] = _resolve_expiry(sched, trading_days)
+        expiry = expiry_cache[week_key]
+        if ts == expiry:
             tags.append("ExpiryDay")
+        elif ts == expiry - pd.Timedelta(days=1):
+            tags.append("DayBefore")
+        elif ts == expiry + pd.Timedelta(days=1):
+            tags.append("DayAfter")
         else:
-            prev_expiry_delta = (wd - exp_dow) % 7
-            if prev_expiry_delta == 1:
-                tags.append("DayAfter")
-            elif (exp_dow - wd) % 7 == 1:
-                tags.append("DayBefore")
-            else:
-                tags.append("")
+            tags.append("")
     return tags
 
 def build_rows(ohlc, vix):
