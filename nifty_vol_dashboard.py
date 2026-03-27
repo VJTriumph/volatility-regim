@@ -62,7 +62,9 @@ def load_csv_ohlcv(filepath):
             df[col].astype(str).str.strip().str.replace(",", ""),
             errors="coerce"
         )
-    return df.sort_index()
+    df = df.sort_index()
+    df = df[~df.index.duplicated(keep="last")]  # drop duplicate dates
+    return df
 
 def fetch_ohlcv():
     print(f"  Loading NIFTY data from {NIFTY_CSV} ...")
