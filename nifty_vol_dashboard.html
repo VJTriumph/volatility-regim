@@ -345,8 +345,8 @@ function analyzeVixRegimes(rows,estimator,vixLow,vixHigh,view){
   const res={};
   for(const reg of["Low","Med","High"]){
     const sub=rows.filter(r=>r.vix>0&&regMap(r)===reg);
+    const f=view==="monthly"?"meg":"weg";
     const expGrp={
-      const f=view==="monthly"?"meg":"weg";
       DayBefore:sub.filter(r=>r[f]==="DayBefore"),
       ExpiryDay:sub.filter(r=>r[f]==="ExpiryDay"),
       DayAfter:sub.filter(r=>r[f]==="DayAfter"),
