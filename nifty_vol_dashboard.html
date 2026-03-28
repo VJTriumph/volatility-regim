@@ -655,6 +655,19 @@ function setVixExpType(btn,v){
   state.vixExpType=v;
   update();
 }
+// Patch: fix weg DayAfter (Python bug: next trading day after weekly expiry was not tagged)
+(function patchWegDayAfter() {
+  const byPid = {};
+  RAW.forEach(r => { if (!byPid[r.pid]) byPid[r.pid] = []; byPid[r.pid].push(r); });
+  Object.values(byPid).forEach(rows => {
+    rows.sort((a,b) => a.date.localeCompare(b.date));
+    for (let i = 0; i < rows.length - 1; i++) {
+      if (rows[i].weg === 'ExpiryDay' && rows[i+1].weg === '') {
+        rows[i+1].weg = 'DayAfter';
+      }
+    }
+  });
+})();
 (function init(){
   // Build period tabs
   const pt=document.getElementById("period-tabs");
