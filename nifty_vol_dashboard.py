@@ -376,7 +376,16 @@ tr:hover td{{background:var(--panel2)}}
   <div class="chart-card"><h3>Day of Week</h3><div id="c-wdn" style="height:290px"></div></div>
   <div class="chart-card"><h3>Monthly Expiry Window</h3><div id="c-meg" style="height:290px"></div></div>
   <div class="chart-card"><h3>Weekly Expiry Window</h3><div id="c-weg" style="height:290px"></div></div>
-  <div class="chart-card"><h3>VIX Regime · Expiry Vol</h3><div id="c-vix" style="height:290px"></div></div>
+  <div class="chart-card">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;padding:0 4px">
+      <h3 style="margin:0">VIX Regime · Expiry Vol</h3>
+      <div style="display:flex;gap:4px" id="vix-exp-tabs">
+        <button class="tab on" data-v="monthly" onclick="setVixExpType(this,'monthly')">Monthly</button>
+        <button class="tab" data-v="weekly" onclick="setVixExpType(this,'weekly')">Weekly</button>
+      </div>
+    </div>
+    <div id="c-vix" style="height:264px"></div>
+  </div>
 </div>
 
 <!-- TABLE -->
@@ -404,6 +413,7 @@ let state = {{
     vixReg:    "all",     // all|low|med|high
     vixLow:    14,        // VIX low/med boundary
     vixHigh:   20,        // VIX med/high boundary
+    vixExpType: "monthly", // monthly | weekly
   dateStart: "{all_start}",
   dateEnd:   "{all_end}",
 }};
@@ -560,7 +570,8 @@ function analyzeAll(rows,estimator){{
 }}
 
 // VIX regime chart
-function analyzeVixRegimes(rows,estimator,vixLow,vixHigh){{
+function analyzeVixRegimes(rows,estimator,vixLow,vixHigh,expType){{
+  const expField=expType==="weekly"?"weg":"meg";
   if(!rows.some(r=>r.vix>0)) return null;
   const lo=vixLow||14, hi=vixHigh||20;
   const regMap=r=>r.vix>0&&r.vix<lo?"Low":r.vix>=lo&&r.vix<=hi?"Med":"High";
@@ -568,10 +579,10 @@ function analyzeVixRegimes(rows,estimator,vixLow,vixHigh){{
   for(const reg of["Low","Med","High"]){{
     const sub=rows.filter(r=>r.vix>0&&regMap(r)===reg);
     const expGrp={{
-      DayBefore:sub.filter(r=>r.meg==="DayBefore"),
-      ExpiryDay:sub.filter(r=>r.meg==="ExpiryDay"),
-      DayAfter:sub.filter(r=>r.meg==="DayAfter"),
-      Other:sub.filter(r=>r.meg==="")
+      DayBefore:sub.filter(r=>r[expField]==="DayBefore"),
+      ExpiryDay:sub.filter(r=>r[expField]==="ExpiryDay"),
+      DayAfter:sub.filter(r=>r[expField]==="DayAfter"),
+      Other:sub.filter(r=>r[expField]==="")
     }};
     const vals={{}};
     for(const [k,g] of Object.entries(expGrp)){{
@@ -581,7 +592,7 @@ function analyzeVixRegimes(rows,estimator,vixLow,vixHigh){{
     }}
     res[reg]=vals;
   }}
-  return {{regimes:res,vixLow:lo,vixHigh:hi}};
+  return {{regimes:res,vixLow:lo,vixHigh:hi,expType:expType||"monthly"}};
 }}
 
 // ═══════════════════════════════════════════════════════════════
@@ -690,7 +701,7 @@ function renderVixChart(vixData){{
     margin:{{...PLOTLY_LAYOUT.margin,b:40,t:20}},
     annotations:[
       {{xref:"paper",yref:"paper",x:0,y:-0.12,
-        text:`VIX Low<${{vixData.vixLow}}  Med ${{vixData.vixLow}}–${{vixData.vixHigh}}  High>${{vixData.vixHigh}}`,
+        text:`${{vixData.expType==="weekly"?"Weekly":"Monthly"}} Exp · VIX Low<${{vixData.vixLow}} Med ${{vixData.vixLow}}–${{vixData.vixHigh}} High>${{vixData.vixHigh}}`,
         showarrow:false,font:{{size:9,color:"#8b949e"}},xanchor:"left"}}
     ],
   }};
@@ -833,7 +844,7 @@ function update(){{
   renderBar("c-wdn",analysis.wdn);
   renderBar("c-meg",analysis.meg);
   renderBar("c-weg",analysis.weg);
-  renderVixChart(analyzeVixRegimes(rows,state.estimator,state.vixLow,state.vixHigh));
+  renderVixChart(analyzeVixRegimes(rows,state.estimator,state.vixLow,state.vixHigh,state.vixExpType));
   renderSummary(rows,analysis);
   renderTable(analysis);
   renderNotice(rows);
@@ -897,6 +908,12 @@ function resetDates(){{
 // ═══════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════
+function setVixExpType(btn,v){{
+  document.querySelectorAll("#vix-exp-tabs .tab").forEach(b=>b.classList.remove("on"));
+  btn.classList.add("on");
+  state.vixExpType=v;
+  update();
+}}
 (function init(){{
   // Build period tabs
   const pt=document.getElementById("period-tabs");
