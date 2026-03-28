@@ -211,7 +211,63 @@ function estVol(vals, estimator){
   return estimator==="gk" ? annVolGK(vals) : annVolCC(vals);
 }
 
-function bootstrap(vals, estimator, nIter=300){
+
+function skewness(a){
+  const n=a.length; if(n<3) return 0;
+  const mu=mean(a);
+  const sd=Math.sqrt(sampleVar(a));
+  if(sd<1e-12) return 0;
+  return a.reduce((s,v)=>s+((v-mu)/sd)**3,0)/n;
+}
+
+function kurtosis(a){
+  const n=a.length; if(n<4) return 0;
+  const mu=mean(a);
+  const sd=Math.sqrt(sampleVar(a));
+  if(sd<1e-12) return 0;
+  return a.reduce((s,v)=>s+((v-mu)/sd)**4,0)/n - 3;
+}
+
+function lag1Acf(a){
+  const n=a.length; if(n<4) return 0;
+  const mu=mean(a);
+  let num=0, den=0;
+  for(let i=1;i<n;i++) num+=(a[i]-mu)*(a[i-1]-mu);
+  for(let i=0;i<n;i++) den+=(a[i]-mu)**2;
+  return den<1e-12 ? 0 : num/den;
+}
+
+function cohensD(g,r){
+  if(g.length<2||r.length<2) return 0;
+  const ag=g.map(Math.abs), ar=r.map(Math.abs);
+  const n1=ag.length, n2=ar.length;
+  const pooledSD=Math.sqrt(((n1-1)*sampleVar(ag)+(n2-1)*sampleVar(ar))/(n1+n2-2));
+  return pooledSD<1e-12 ? 0 : (mean(ag)-mean(ar))/pooledSD;
+}
+
+function permutationTest(g,r,nPerm=1000){
+  const ag=g.map(Math.abs), ar=r.map(Math.abs);
+  if(ag.length<3||ar.length<3) return 1;
+  const n1=ag.length;
+  const obs=Math.abs(mean(ag)-mean(ar));
+  const pool=[...ag,...ar];
+  const N=pool.length;
+  let cnt=0;
+  for(let i=0;i<nPerm;i++){
+    const s=[...pool];
+    for(let j=0;j<n1;j++){
+      const k=j+Math.floor(Math.random()*(N-j));
+      [s[j],s[k]]=[s[k],s[j]];
+    }
+    const g1=s.slice(0,n1);
+    const rest2=s.slice(n1);
+    const diff=Math.abs(mean(g1)-mean(rest2));
+    if(diff>=obs) cnt++;
+  }
+  return (cnt+1)/(nPerm+1);
+}
+
+function bootstrap(vals, estimator, nIter=1000){
   const n=vals.length;
   if(n<4) return [NaN,NaN];
   const boots=[];
@@ -300,30 +356,69 @@ function analyzeGroup(rows, keyFn, labels, estimator){
     const rest=rows.filter(r=>keyFn(r)!==lbl);
     const gVals=estimator==="gk"?grp.map(r=>r.gk):grp.map(r=>r.ret);
     const rVals=estimator==="gk"?rest.map(r=>r.gk):rest.map(r=>r.ret);
-    if(grp.length<2){
-      results.push({label:String(lbl),n:grp.length,vol:NaN,ciLo:NaN,ciHi:NaN,pval:1,adjP:1,ratio:NaN,meanRet:NaN});
+    if(grp.length<10){
+      results.push({label:String(lbl),n:grp.length,vol:NaN,ciLo:NaN,ciHi:NaN,pval:1,adjP:1,ratio:NaN,meanRet:NaN,cohenD:NaN,skew:NaN,acf:NaN,ciOverlapAvg:false,oosVol:NaN,insVol:NaN,periodSig:0,periodTotal:0});
       continue;
     }
     const vol=estVol(gVals,estimator);
-    const [ciLo,ciHi]=bootstrap(gVals,estimator,250);
-    // t-test always on returns (vol proxy)
-    const pval=welchTtest(grp.map(r=>r.ret),rest.map(r=>r.ret));
-    const mr=mean(grp.map(r=>r.ret));
-    results.push({label:String(lbl),n:grp.length,vol,ciLo,ciHi,pval,adjP:1,ratio:vol/overallVol,meanRet:mr});
+    const [ciLo,ciHi]=bootstrap(gVals,estimator,1000);
+    // Permutation test (distribution-free) on absolute returns
+    const pval=permutationTest(grp.map(r=>r.ret),rest.map(r=>r.ret),1000);
+    const gRets=grp.map(r=>r.ret);
+    const rRets=rest.map(r=>r.ret);
+    const d=cohensD(gRets,rRets);
+    const sk=skewness(gVals);
+    const acf=lag1Acf(gVals);
+    const holdN=Math.max(1,Math.floor(gVals.length*0.2));
+    const oosVals=gVals.slice(-holdN);
+    const insVals=gVals.slice(0,-holdN);
+    const oosVol=oosVals.length>=2?estVol(oosVals,estimator):NaN;
+    const insVol=insVals.length>=2?estVol(insVals,estimator):NaN;
+    const ciOverlapAvg=(!isNaN(ciLo)&&!isNaN(ciHi))?(ciLo>overallVol||ciHi<overallVol):false;
+    const mr=mean(gRets);
+    results.push({label:String(lbl),n:grp.length,vol,ciLo,ciHi,pval,adjP:1,ratio:vol/overallVol,meanRet:mr,cohenD:d,skew:sk,acf,ciOverlapAvg,oosVol,insVol});
   }
 
   // BH-FDR
   const adjP=bhFDR(results.map(r=>r.pval));
   results.forEach((r,i)=>r.adjP=adjP[i]);
 
+  // Period stability & OOS consistency
+  results.forEach(r=>{
+    const ps=periodStability(rows,keyFn,r.label,estimator);
+    r.periodSig=ps.sigCount;
+    r.periodTotal=ps.validCount;
+  });
+
   return {results,overallVol};
 }
 
+// ── Period Stability: run analyzeGroup across 3 known periods ─────────────
+function periodStability(allRows, keyFn, label, estimator){
+  const periods=[
+    {s:'2015-01-01',e:'2019-12-31'},
+    {s:'2020-01-01',e:'2024-10-31'},
+    {s:'2024-11-01',e:'2099-12-31'}
+  ];
+  let sigCount=0, validCount=0;
+  for(const per of periods){
+    const pRows=allRows.filter(r=>r.date>=per.s&&r.date<=per.e);
+    if(pRows.length<20) continue;
+    const gRows=pRows.filter(r=>keyFn(r)===label);
+    const rRows=pRows.filter(r=>keyFn(r)!==label);
+    if(gRows.length<5||rRows.length<5) continue;
+    const p=permutationTest(gRows.map(r=>r.ret),rRows.map(r=>r.ret),200);
+    validCount++;
+    if(p<0.05) sigCount++;
+  }
+  return {sigCount,validCount};
+}
+
 function analyzeAll(rows,estimator){
-  // Day of month — only keep days with n>=3
+  // Day of month — only keep days with n>=10
   const domAll=[...Array(31)].map((_,i)=>i+1);
   const domResult=analyzeGroup(rows,r=>r.dom,domAll,estimator);
-  domResult.results=domResult.results.filter(r=>r.n>=3);
+  domResult.results=domResult.results.filter(r=>r.n>=10);
 
   // Week of month
   const wom=analyzeGroup(rows,r=>r.wom,[1,2,3,4,5],estimator);
@@ -402,8 +497,11 @@ function renderBar(divId,analysis){
     AnnVol: ${(r.vol*100).toFixed(2)}%<br>
     95% CI: [${(r.ciLo*100).toFixed(2)}%, ${(r.ciHi*100).toFixed(2)}%]<br>
     vs Avg: ${(r.ratio*100-100).toFixed(1)}%<br>
-    Raw p: ${r.pval.toFixed(3)}<br>
     FDR-adj p: ${r.adjP.toFixed(3)}<br>
+    Cohen's d: ${isNaN(r.cohenD)?"–":r.cohenD.toFixed(2)}<br>
+    Skew: ${isNaN(r.skew)?"–":r.skew.toFixed(2)}<br>
+    ACF(1): ${isNaN(r.acf)?"–":r.acf.toFixed(2)}<br>
+    Periods sig: ${r.periodTotal>0?r.periodSig+"/"+r.periodTotal:"–"}<br>
     Avg Ret: ${(r.meanRet*100).toFixed(3)}%
   `.trim());
 
@@ -497,6 +595,8 @@ function renderSummary(rows,analysis){
     {label:"Mean Daily Ret",val:(mu*100).toFixed(3)+"%",cls:mu>0?"lo":"hi"},
     {label:"Outliers Removed",val:window._outlierRemoved||0,cls:""},
     avgVix?{label:"Avg India VIX",val:avgVix.toFixed(1),cls:avgVix>18?"hi":"lo"}:null,
+    {label:"Skewness",val:skewness(rets).toFixed(2),cls:Math.abs(skewness(rets))>1?"hi":"lo"},
+    {label:"Kurtosis",val:kurtosis(rets).toFixed(2),cls:kurtosis(rets)>3?"hi":"lo"},
     {label:"Date Range",val:dateRange,cls:""},
   ].filter(Boolean);
 
@@ -547,14 +647,35 @@ function renderTable(analysis){
   const thead=`<tr>
     <th>Dimension</th><th>Group</th><th>n</th>
     <th>Ann Vol</th><th>95% CI</th><th>vs Avg</th>
-    <th>Raw p</th><th>FDR-adj p</th><th>Signal</th>
+    <th>FDR-adj p</th><th>Signal</th>
+    <th title="Cohen's d">d</th><th title="Skewness">Skew</th>
+    <th title="Lag-1 ACF">ACF</th><th title="OOS Vol / In-sample Vol">OOS</th>
+    <th title="Significant in X/3 periods">Stability</th>
+    <th title="Reliability score 0-5">★</th>
   </tr>`;
 
   const tbody=allRows.map(r=>{
     const vol=(r.vol*100).toFixed(2)+"%";
     const ci=isNaN(r.ciLo)?"–":`[${(r.ciLo*100).toFixed(2)}%, ${(r.ciHi*100).toFixed(2)}%]`;
-    const rawP=r.pval.toFixed(3);
     const adjP=r.adjP.toFixed(3);
+    const dVal=isNaN(r.cohenD)?"–":r.cohenD.toFixed(2);
+    const dCls=Math.abs(r.cohenD||0)>0.5?"sig-hi":Math.abs(r.cohenD||0)>0.2?"sig-med":"";
+    const skVal=isNaN(r.skew)?"–":r.skew.toFixed(2);
+    const acfVal=isNaN(r.acf)?"–":r.acf.toFixed(2);
+    const acfFlag=Math.abs(r.acf||0)>0.15?"⚠":"";
+    const oosRatio=(!isNaN(r.oosVol)&&!isNaN(r.insVol)&&r.insVol>0)?(r.oosVol/r.insVol):NaN;
+    const oosStr=isNaN(oosRatio)?"–":((oosRatio-1)*100).toFixed(0)+"%";
+    const oosCls=Math.abs((oosRatio||1)-1)<0.3?"sig-hi":"sig-med";
+    const psStr=(r.periodTotal>0)?`${r.periodSig}/${r.periodTotal}`:"–";
+    const psCls=(r.periodSig>=2&&r.periodTotal>=2)?"sig-hi":(r.periodSig>=1&&r.periodTotal>=2)?"sig-med":"";
+    let score=0;
+    if(r.adjP<0.05) score++;
+    if(Math.abs(r.cohenD||0)>0.2) score++;
+    if(r.ciOverlapAvg) score++;
+    if(r.periodSig>=2) score++;
+    if(!isNaN(oosRatio)&&Math.abs(oosRatio-1)<0.3) score++;
+    const stars="★".repeat(score)+"☆".repeat(5-score);
+    const starCls=score>=4?"sig-hi":score>=2?"sig-med":"";
     return `<tr>
       <td style="color:var(--muted)">${r.dim}</td>
       <td><b>${r.label}</b></td>
@@ -562,9 +683,14 @@ function renderTable(analysis){
       <td>${vol}</td>
       <td style="color:var(--muted);font-size:10px">${ci}</td>
       <td>${ratioBadge(r.ratio)}</td>
-      <td>${rawP}</td>
       <td><b>${adjP}</b></td>
       <td>${pBadge(r.adjP)}</td>
+      <td class="${dCls}">${dVal}</td>
+      <td>${skVal}</td>
+      <td>${acfVal}${acfFlag}</td>
+      <td class="${oosCls}">${oosStr}</td>
+      <td class="${psCls}">${psStr}</td>
+      <td class="${starCls}" style="letter-spacing:-1px">${stars}</td>
     </tr>`;
   }).join("");
 
@@ -585,10 +711,10 @@ function renderNotice(rows){
       if(r.adjP<0.05&&!isNaN(r.vol)) nSig5.push(r);
   const est=state.estimator==="gk"?"Garman-Klass":"Close-to-Close";
   document.getElementById("notice").textContent=
-    `Estimator: ${est}  ·  Bootstrap CIs: 250 iterations  ·  `+
+    `Estimator: ${est}  ·  Bootstrap CIs: 1000 iterations · Permutation test (distribution-free) · n≥10 filter  ·  `+
     `FDR correction: Benjamini-Hochberg  ·  `+
     `${nSig5.length} group(s) significant at FDR-adjusted p<0.05  ·  `+
-    `n<5 bars shown but flagged unreliable`;
+    `Reliability ★★★★★ = p<0.05 + |d|>0.2 + CI excl avg + 2/3 periods + OOS stable`;
 }
 
 // ═══════════════════════════════════════════════════════════════
