@@ -135,37 +135,47 @@ def tag_monthly_expiry(idx, exp_dow):
 def tag_weekly_expiry(idx, exp_dow):
     """Tag each date relative to the weekly expiry (every exp_dow).
     If that exp_dow is a market holiday, expiry rolls to the previous trading day."""
+    trading_days_sorted = sorted(idx)
     trading_days = set(idx)
-    # Build a map: for each week find actual expiry day
-    # A 'week' is identified by the Monday of that week
     expiry_cache = {}
-    def get_weekly_expiry(ts):
-        # find the scheduled expiry (exp_dow) of this week
+
+    # Determine the actual (possibly rolled) weekly expiry for a given scheduled date
+    def get_expiry(sched):
+        if sched not in expiry_cache:
+            expiry_cache[sched] = _resolve_expiry(sched, trading_days)
+        return expiry_cache[sched]
+
+    # Build set of all weekly expiry dates in this period
+    expiry_set = set()
+    for ts in trading_days_sorted:
         wd = ts.weekday()
-        days_to_expiry = (exp_dow - wd) % 7
-        sched = ts + pd.Timedelta(days=days_to_expiry)
-        # if we've already passed expiry this week, look at last week's
-        if days_to_expiry == 0:
-            sched = ts  # it's today (will be resolved below)
-        week_key = sched
-        if week_key not in expiry_cache:
-            expiry_cache[week_key] = _resolve_expiry(sched, trading_days)
-        return expiry_cache[week_key]
+        days_to_exp = (exp_dow - wd) % 7
+        sched = ts + pd.Timedelta(days=days_to_exp)
+        expiry_set.add(get_expiry(sched))
+
+    # Build next-trading-day map: expiry → next trading day after expiry
+    td_list = trading_days_sorted
+    expiry_to_dayafter = {}
+    for i, td in enumerate(td_list):
+        if td in expiry_set and i + 1 < len(td_list):
+            expiry_to_dayafter[td] = td_list[i + 1]
+
+    # Build DayBefore set: trading day immediately before each expiry
+    expiry_to_daybefore = {}
+    for i, td in enumerate(td_list):
+        if td in expiry_set and i > 0:
+            expiry_to_daybefore[td] = td_list[i - 1]
+
+    dayafter_set = set(expiry_to_dayafter.values())
+    daybefore_set = set(expiry_to_daybefore.values())
 
     tags = []
     for ts in idx:
-        wd = ts.weekday()
-        days_to_expiry = (exp_dow - wd) % 7
-        sched = ts + pd.Timedelta(days=days_to_expiry)
-        week_key = sched
-        if week_key not in expiry_cache:
-            expiry_cache[week_key] = _resolve_expiry(sched, trading_days)
-        expiry = expiry_cache[week_key]
-        if ts == expiry:
+        if ts in expiry_set:
             tags.append("ExpiryDay")
-        elif ts == expiry - pd.Timedelta(days=1):
+        elif ts in daybefore_set:
             tags.append("DayBefore")
-        elif ts == expiry + pd.Timedelta(days=1):
+        elif ts in dayafter_set:
             tags.append("DayAfter")
         else:
             tags.append("")
