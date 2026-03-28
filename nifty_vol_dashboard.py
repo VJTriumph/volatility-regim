@@ -35,7 +35,7 @@ PERIODS = [
          weekly_exp_dow  = 3),
     dict(label  = "Nov 2024–Now  ·  Tue Expiry",
          start  = "2024-11-01",
-         end    = "2026-03-25",
+         end    = "2026-03-27",
          monthly_exp_dow = 1,     # Tuesday
          weekly_exp_dow  = 1),
 ]
