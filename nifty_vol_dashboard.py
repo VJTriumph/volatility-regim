@@ -11,7 +11,7 @@ FEATURES
   • Outlier filter (2σ / 2.5σ / 3σ / off)
   • VIX regime conditioning (Low / Med / High terciles)
   • Custom date range override
-  • All 5 calendar dimensions: DoM, WoM, Weekday, Monthly Expiry, Weekly Expiry
+  • All 5 calendar dimensions: DoM, WoM, Weekday, Monthly Expiry, Weekly Expiryh
   • Significance heatmap table
 """
 import warnings; warnings.filterwarnings("ignore")
@@ -35,7 +35,7 @@ PERIODS = [
          weekly_exp_dow  = 3),
     dict(label  = "Nov 2024–Now  ·  Tue Expiry",
          start  = "2024-11-01",
-         end    = "2026-03-27",
+         end    = pd.Timestamp.today().strftime("%Y-%m-%d"),
          monthly_exp_dow = 1,     # Tuesday
          weekly_exp_dow  = 1),
 ]
